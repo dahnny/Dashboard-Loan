@@ -1,4 +1,5 @@
 import enum
+import uuid
 from decimal import Decimal
 
 from sqlalchemy import (
@@ -18,6 +19,7 @@ from sqlalchemy.orm import relationship
 
 from app.db.models.base import Base
 from app.db.models.mixins import TimestampMixin
+from sqlalchemy.dialects.postgresql import UUID
 
 
 class LoanStatus(str, enum.Enum):
@@ -30,24 +32,22 @@ class LoanStatus(str, enum.Enum):
 class Loanee(Base, TimestampMixin):
     __tablename__ = "loanees"
 
-    id = Column(Integer, primary_key=True, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, unique=True)
+    id = Column(UUID(as_uuid=True), default=uuid.uuid4, primary_key=True, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
 
     full_name = Column(String, nullable=False)
     email = Column(String, nullable=True, index=True)
     phone_number = Column(String, nullable=True)
     address = Column(Text, nullable=True)
 
-    user = relationship("User")
     organization = relationship("Organization")
     loans = relationship("Loan", back_populates="loanee", cascade="all, delete-orphan")
     documents = relationship("LoanDocument", back_populates="loanee", cascade="all, delete-orphan")
-    direct_debit_mandates = relationship(
-        "DirectDebitMandate",
-        back_populates="loanee",
-        cascade="all, delete-orphan",
-    )
+    # direct_debit_mandates = relationship(
+    #     "DirectDebitMandate",
+    #     back_populates="loanee",
+    #     cascade="all, delete-orphan",
+    # )
 
 
 class Loan(Base, TimestampMixin):
@@ -58,9 +58,9 @@ class Loan(Base, TimestampMixin):
         Index("ix_loans_org_due_date_status", "organization_id", "due_date", "status"),
     )
 
-    id = Column(Integer, primary_key=True, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
-    loanee_id = Column(Integer, ForeignKey("loanees.id", ondelete="RESTRICT"), nullable=False, index=True)
+    id = Column(UUID(as_uuid=True), default=uuid.uuid4, primary_key=True, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
+    loanee_id = Column(UUID(as_uuid=True), ForeignKey("loanees.id", ondelete="RESTRICT"), nullable=False, index=True)
 
     amount = Column(Numeric(12, 2), nullable=False)
     loan_term_weeks = Column(Integer, nullable=False)
@@ -73,6 +73,8 @@ class Loan(Base, TimestampMixin):
 
     # Stored (derived) value for audit stability: amount + surcharge (+ penalty at time of storing).
     total_payable = Column(Numeric(12, 2), nullable=False)
+    
+    is_document_uploaded = Column(Boolean, nullable=False, default=False)
 
     loanee = relationship("Loanee", back_populates="loans")
     organization = relationship("Organization")
@@ -84,10 +86,10 @@ class Loan(Base, TimestampMixin):
 class LoanDocument(Base, TimestampMixin):
     __tablename__ = "loan_documents"
 
-    id = Column(Integer, primary_key=True, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
-    loanee_id = Column(Integer, ForeignKey("loanees.id", ondelete="CASCADE"), nullable=False, index=True)
-    loan_id = Column(Integer, ForeignKey("loans.id", ondelete="SET NULL"), nullable=True, index=True)
+    id = Column(UUID(as_uuid=True), default=uuid.uuid4, primary_key=True, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
+    loanee_id = Column(UUID(as_uuid=True), ForeignKey("loanees.id", ondelete="CASCADE"), nullable=False, index=True)
+    loan_id = Column(UUID(as_uuid=True), ForeignKey("loans.id", ondelete="SET NULL"), nullable=True, index=True)
 
     document_type = Column(String, nullable=False)
     # Storage object key/path (not a permanent public URL)
@@ -105,9 +107,9 @@ class LoanDocument(Base, TimestampMixin):
 class Payment(Base, TimestampMixin):
     __tablename__ = "payments"
 
-    id = Column(Integer, primary_key=True, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
-    loan_id = Column(Integer, ForeignKey("loans.id", ondelete="CASCADE"), nullable=False, index=True)
+    id = Column(UUID(as_uuid=True), default=uuid.uuid4, primary_key=True, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
+    loan_id = Column(UUID(as_uuid=True), ForeignKey("loans.id", ondelete="CASCADE"), nullable=False, index=True)
 
     amount = Column(Numeric(12, 2), nullable=False)
     reference = Column(String, nullable=True, index=True)
@@ -117,28 +119,28 @@ class Payment(Base, TimestampMixin):
     organization = relationship("Organization")
 
 
-class DirectDebitMandate(Base, TimestampMixin):
-    __tablename__ = "direct_debit_mandates"
+# class DirectDebitMandate(Base, TimestampMixin):
+#     __tablename__ = "direct_debit_mandates"
 
-    id = Column(Integer, primary_key=True, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
-    loanee_id = Column(Integer, ForeignKey("loanees.id", ondelete="CASCADE"), nullable=False, index=True)
+#     id = Column(Integer, primary_key=True, index=True)
+#     organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
+#     loanee_id = Column(Integer, ForeignKey("loanees.id", ondelete="CASCADE"), nullable=False, index=True)
 
-    provider = Column(String, nullable=False)
-    mandate_reference = Column(String, nullable=False, unique=True, index=True)
-    active = Column(Boolean, nullable=False, default=True)
+#     provider = Column(String, nullable=False)
+#     mandate_reference = Column(String, nullable=False, unique=True, index=True)
+#     active = Column(Boolean, nullable=False, default=True)
 
-    loanee = relationship("Loanee", back_populates="direct_debit_mandates")
-    organization = relationship("Organization")
+#     # loanee = relationship("Loanee", back_populates="direct_debit_mandates")
+#     organization = relationship("Organization")
 
 
 class AuditLog(Base, TimestampMixin):
     __tablename__ = "audit_logs"
 
-    id = Column(Integer, primary_key=True, index=True)
-    organization_id = Column(Integer, ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
-    actor_user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
-    loan_id = Column(Integer, ForeignKey("loans.id", ondelete="CASCADE"), nullable=True, index=True)
+    id = Column(UUID(as_uuid=True), default=uuid.uuid4, primary_key=True, index=True)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
+    actor_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    loan_id = Column(UUID(as_uuid=True), ForeignKey("loans.id", ondelete="CASCADE"), nullable=True, index=True)
 
     action = Column(String, nullable=False)
     from_status = Column(Enum(LoanStatus, name="loan_status"), nullable=True)

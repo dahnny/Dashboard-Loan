@@ -1,45 +1,30 @@
 from __future__ import annotations
 
-import httpx
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 
-from app.core.config import settings
+from app.api.deps import get_db, get_current_user
+from app.db.schemas.user import UserCreate, UserLogin, UserResponse
+from app.services.auth_service import AuthService
 
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/signup", status_code=status.HTTP_201_CREATED)
-async def supabase_signup(payload: dict):
-    if not settings.supabase_url or not settings.supabase_anon_key:
-        raise HTTPException(status_code=500, detail="Supabase is not configured")
-
-    url = f"{settings.supabase_url.rstrip('/')}/auth/v1/signup"
-    headers = {
-        "apikey": settings.supabase_anon_key,
-        "Authorization": f"Bearer {settings.supabase_anon_key}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    return resp.json()
+@router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def signup(payload: UserCreate, db: Session = Depends(get_db)) -> UserResponse:
+    auth_service = AuthService(db=db)
+    return auth_service.register_user(user=payload)
 
 
 @router.post("/login")
-async def supabase_login(payload: dict):
-    if not settings.supabase_url or not settings.supabase_anon_key:
-        raise HTTPException(status_code=500, detail="Supabase is not configured")
+async def login(payload: UserLogin, db: Session = Depends(get_db)):
+    auth_service = AuthService(db=db)
+    return auth_service.authenticate_user(email=payload.email, password=payload.password)
 
-    url = f"{settings.supabase_url.rstrip('/')}/auth/v1/token?grant_type=password"
-    headers = {
-        "apikey": settings.supabase_anon_key,
-        "Authorization": f"Bearer {settings.supabase_anon_key}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=15) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    return resp.json()
+
+@router.post("/logout")
+async def logout(payload: dict, user=Depends(get_current_user)):
+    # user is provided by internal JWT dependency, not Supabase
+    auth_service = AuthService(db=None)  # no DB needed for token revocation
+    return auth_service.logout_user(payload=payload, user=user)

@@ -1,22 +1,38 @@
 from __future__ import annotations
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_roles
-from app.db.crud.loan import create_loan, create_loanee, get_loan, list_loans
+from app.api.deps import get_current_user, get_db
+from app.db.crud.document import (
+    create_document,
+    get_document_for_loan,
+    list_documents_for_loan,
+    list_documents_for_loanee_email,
+)
+from app.db.crud.loan import create_loan, get_loan, list_loans
+from app.db.crud.loanee import get_loanee
 from app.db.models.loan import LoanStatus
+from app.core.config import settings
 from app.db.schemas.loan import (
     LoanCreate,
+    LoanDocumentResponse,
     LoanResponse,
     LoanStatusTransitionRequest,
     LoaneeCreate,
     LoaneeResponse,
+    SignedUrlResponse,
 )
 from app.exceptions.loan_exceptions import InvalidLoanTransitionError
+from app.integrations.supabase_storage import (
+    create_signed_url,
+    sha256_hex,
+    upload_object,
+)
 from app.services.loan_service import LoanService
 from typing import Optional
-from datetime import date
+from datetime import date, datetime
 from app.core.redis import get_redis
 import json
 
@@ -24,17 +40,8 @@ import json
 router = APIRouter(
     prefix="/loans",
     tags=["loans"],
-    dependencies=[Depends(require_roles("admin", "staff"))],
+    dependencies=[Depends(get_current_user)],
 )
-
-
-@router.post(
-    "/loanees", response_model=LoaneeResponse, status_code=status.HTTP_201_CREATED
-)
-def create_new_loanee(
-    payload: LoaneeCreate, db: Session = Depends(get_db)
-) -> LoaneeResponse:
-    return create_loanee(db, payload)
 
 
 @router.post("/", response_model=LoanResponse, status_code=status.HTTP_201_CREATED)
@@ -83,7 +90,9 @@ def list_loans_endpoint(
     offset: int = 0,
     db: Session = Depends(get_db),
 ) -> list[LoanResponse]:
-    return list_loans(db, status=status, due_from=due_from, due_to=due_to, limit=limit, offset=offset)
+    return list_loans(
+        db, status=status, due_from=due_from, due_to=due_to, limit=limit, offset=offset
+    )
 
 
 @router.get("/due-today", response_model=list[LoanResponse])
@@ -94,7 +103,114 @@ def due_today_endpoint(db: Session = Depends(get_db)) -> list[LoanResponse]:
     cached = r.get(cache_key)
     if cached:
         return [LoanResponse(**obj) for obj in json.loads(cached)]
-    items = list_loans(db, status=LoanStatus.due, due_from=today, due_to=today, limit=500, offset=0)
+    items = list_loans(
+        db, status=LoanStatus.due, due_from=today, due_to=today, limit=500, offset=0
+    )
     payload = [LoanResponse.from_orm(x).dict() for x in items]
     r.setex(cache_key, 60, json.dumps(payload))
     return items
+
+
+@router.post(
+    "/{loan_id}/documents/upload",
+    response_model=LoanDocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_document_endpoint(
+    document_type: str,
+    loan_id: UUID,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> LoanDocumentResponse:
+    loan = get_loan(db, loan_id)
+    if not loan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan not found"
+        )
+    if loan.is_document_uploaded:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Document already uploaded for this loan",
+        )
+
+    content = await file.read()
+    checksum = sha256_hex(content)
+    bucket = settings.supabase_storage_bucket
+
+    # Keep object keys stable and non-guessable enough: namespace by loanee + date + checksum.
+    safe_name = (
+        (file.filename or "upload")
+        .replace("..", ".")
+        .replace("/", "_")
+        .replace("\\", "_")
+    )
+    object_path = f"loans/{loan_id}/{datetime.utcnow().strftime('%Y%m%d')}/{checksum}_{safe_name}"
+
+    await upload_object(
+        bucket=bucket,
+        object_path=object_path,
+        content=content,
+        content_type=file.content_type,
+    )
+
+    doc = create_document(
+        db,
+        loanee_id=loan.loanee_id,
+        loan_id=loan_id,
+        document_type=document_type,
+        bucket=bucket,
+        uri=object_path,
+        content_type=file.content_type,
+        size_bytes=len(content),
+        checksum=checksum,
+    )
+    # Mark loan as having document uploaded
+    loan.is_document_uploaded = True
+    db.add(loan)
+    db.commit()
+
+    return doc
+
+
+@router.get("/{loan_id}/documents", response_model=list[LoanDocumentResponse])
+def list_documents_endpoint(
+    loan_id: UUID, db: Session = Depends(get_db)
+) -> list[LoanDocumentResponse]:
+    loan = get_loan(db, loan_id)
+    if not loan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan not found"
+        )
+    return list_documents_for_loan(db, loan_id)
+
+
+@router.get("/documents/by-loanee", response_model=list[LoanDocumentResponse])
+def list_documents_by_loanee_email_endpoint(
+    email: str,
+    db: Session = Depends(get_db),
+) -> list[LoanDocumentResponse]:
+    return list_documents_for_loanee_email(db, email=email)
+
+@router.get(
+    "/{loan_id}/documents/{document_id}/signed-url", response_model=SignedUrlResponse
+)
+async def get_document_signed_url_endpoint(
+    loan_id: UUID,
+    document_id: UUID,
+    expires_in: int = 60,
+    db: Session = Depends(get_db),
+) -> SignedUrlResponse:
+    loan = get_loan(db, loan_id)
+    if not loan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan not found"
+        )
+    doc = get_document_for_loan(db, loan_id=loan_id, document_id=document_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
+        )
+    signed = await create_signed_url(
+        bucket=doc.bucket, object_path=doc.uri, expires_in=expires_in
+    )
+    return SignedUrlResponse(signed_url=signed)

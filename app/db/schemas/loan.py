@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID
 
 from pydantic import BaseModel
 
@@ -13,29 +14,26 @@ class LoaneeCreate(BaseModel):
     email: str | None = None
     phone_number: str | None = None
     address: str | None = None
-    user_id: int | None = None
 
 
 class LoaneeResponse(BaseModel):
-    id: int
+    id: UUID
     full_name: str
     email: str | None = None
     phone_number: str | None = None
     address: str | None = None
-    user_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
-class LoanCreate(BaseModel):
-    loanee_id: int
+class LoanCreate(LoaneeCreate):
     amount: Decimal
     loan_term_weeks: int
-    surcharge: Decimal = Decimal("0.00")
-    penalty: Decimal = Decimal("0.00")
+    surcharge: int = 0
+    penalty: int = 0
     # Optional inputs for calculating due_date
     start_date: date | None = None
     due_date: date | None = None
@@ -43,8 +41,8 @@ class LoanCreate(BaseModel):
 
 
 class LoanResponse(BaseModel):
-    id: int
-    loanee_id: int
+    id: UUID
+    loanee_id: UUID
     amount: Decimal
     loan_term_weeks: int
     surcharge: Decimal
@@ -57,7 +55,7 @@ class LoanResponse(BaseModel):
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class LoanStatusTransitionRequest(BaseModel):
@@ -74,9 +72,9 @@ class LoaneeUpdate(BaseModel):
 
 
 class LoanDocumentResponse(BaseModel):
-    id: int
-    loanee_id: int
-    loan_id: int | None = None
+    id: UUID
+    loanee_id: UUID
+    loan_id: UUID | None = None
     document_type: str
     bucket: str
     uri: str
@@ -87,7 +85,7 @@ class LoanDocumentResponse(BaseModel):
     updated_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class SignedUrlResponse(BaseModel):

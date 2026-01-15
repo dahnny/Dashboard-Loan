@@ -4,7 +4,7 @@ from .organization import Organization
 
 from .loan import (
 	AuditLog,
-	DirectDebitMandate,
+	# DirectDebitMandate,
 	Loan,
 	LoanDocument,
 	Loanee,
@@ -12,9 +12,9 @@ from .loan import (
 	Payment,
 )
 
-from .debit import (
-    RecurringDebitSchedule,
-    DebitScheduleItem,
-)
+# from .debit import (
+#     RecurringDebitSchedule,
+#     DebitScheduleItem,
+# )
 
 from .base import Base 

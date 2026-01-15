@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -7,23 +8,22 @@ from sqlalchemy.orm import Session
 from app.db.models.loan import AuditLog, Loan, LoanStatus, Payment
 from app.exceptions.loan_exceptions import InvalidLoanTransitionError
 
-
 class LoanService:
     _ALLOWED_TRANSITIONS: dict[LoanStatus, set[LoanStatus]] = {
         LoanStatus.not_due: {LoanStatus.due, LoanStatus.paid},
         LoanStatus.due: {LoanStatus.paid, LoanStatus.defaulted},
         LoanStatus.paid: set(),
-        LoanStatus.defaulted: set(),
+        LoanStatus.defaulted: {LoanStatus.paid},
     }
 
     def __init__(self, db: Session):
         self._db = db
 
-    def compute_total_payable(self, *, amount: Decimal, surcharge: Decimal, penalty: Decimal) -> Decimal:
-        return (amount or Decimal("0")) + (surcharge or Decimal("0")) + (penalty or Decimal("0"))
+    def compute_total_payable(self, *, amount: Decimal, surcharge: int, penalty: int) -> Decimal:
+        amount = amount + amount * Decimal(surcharge or 0) / Decimal(100) + amount * Decimal(penalty or 0) / Decimal(100)
+        return amount.quantize(Decimal("0.01"))
 
     def term_to_timedelta(self, *, weeks: int):
-        from datetime import timedelta
         return timedelta(weeks=weeks)
 
     def assert_can_transition(self, *, from_status: LoanStatus, to_status: LoanStatus) -> None:
