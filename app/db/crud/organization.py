@@ -1,24 +1,40 @@
 from __future__ import annotations
 
+import uuid
+
 from sqlalchemy.orm import Session
 
 from app.db.models.organization import Organization
+from app.core.security import hash_password
+from app.db.schemas.organization import OrganizationCreate
 
 
-DEFAULT_ORG_SLUG = "default"
-DEFAULT_ORG_NAME = "Default Organization"
+def get_organization(db: Session, organization_id: str) -> Organization | None:
+    return db.query(Organization).filter(Organization.id == organization_id).first()
 
 
-def get_default_organization(db: Session) -> Organization | None:
-    return db.query(Organization).filter(Organization.slug == DEFAULT_ORG_SLUG).first()
+def get_organization_by_email(db: Session, email: str) -> Organization | None:
+    return db.query(Organization).filter(Organization.email == email).first()
 
 
-def get_or_create_default_organization(db: Session) -> Organization:
-    org = get_default_organization(db)
-    if org:
-        return org
+def get_organization_by_slug(db: Session, slug: str) -> Organization | None:
+    return db.query(Organization).filter(Organization.slug == slug).first()
 
-    org = Organization(name=DEFAULT_ORG_NAME, slug=DEFAULT_ORG_SLUG)
+
+def create_organization(db: Session, payload: OrganizationCreate) -> Organization:
+    hashed_password = hash_password(payload.password)
+    base_slug = payload.name.lower().strip().replace(" ", "-") or "org"
+    slug = base_slug
+    if get_organization_by_slug(db, slug):
+        slug = f"{base_slug}-{str(uuid.uuid4())[:8]}"
+    org = Organization(
+        name=payload.name,
+        slug=slug,
+        email=payload.email,
+        password=hashed_password,
+        phone_number=payload.phone_number,
+        address=payload.address,
+    )
     db.add(org)
     db.commit()
     db.refresh(org)

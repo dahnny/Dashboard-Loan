@@ -6,7 +6,6 @@ import uuid
 
 from sqlalchemy.orm import Session
 
-from app.db.crud.organization import get_or_create_default_organization
 from app.db.models.loan import DirectDebitMandate, Loan, Payment
 from app.db.models.debit import (
     DebitScheduleItem,
@@ -20,9 +19,6 @@ class DirectDebitService:
     def __init__(self, db: Session):
         self._db = db
 
-    def _org_id(self) -> int:
-        return get_or_create_default_organization(self._db).id
-
     def create_schedule(
         self,
         *,
@@ -31,7 +27,7 @@ class DirectDebitService:
         number_of_debits: int = 1,
         first_due_date: date | None = None,
     ) -> RecurringDebitSchedule:
-        org_id = self._org_id()
+        org_id = loan.organization_id
         total = Decimal(loan.total_payable)
         if number_of_debits <= 1:
             schedule_type = "single"

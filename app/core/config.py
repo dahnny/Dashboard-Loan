@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     redis_url: str | None = None
     celery_broker_url: str | None = None
     celery_result_backend: str | None = None
+
+    # CORS
+    cors_allow_origins: str | None = None
     
 
     # Mono Direct Debit

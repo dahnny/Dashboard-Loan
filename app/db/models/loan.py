@@ -139,7 +139,6 @@ class AuditLog(Base, TimestampMixin):
 
     id = Column(UUID(as_uuid=True), default=uuid.uuid4, primary_key=True, index=True)
     organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="RESTRICT"), nullable=False, index=True)
-    actor_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
     loan_id = Column(UUID(as_uuid=True), ForeignKey("loans.id", ondelete="CASCADE"), nullable=True, index=True)
 
     action = Column(String, nullable=False)
@@ -147,6 +146,5 @@ class AuditLog(Base, TimestampMixin):
     to_status = Column(Enum(LoanStatus, name="loan_status"), nullable=True)
     message = Column(Text, nullable=True)
 
-    actor_user = relationship("User")
     loan = relationship("Loan", back_populates="audit_logs")
     organization = relationship("Organization")

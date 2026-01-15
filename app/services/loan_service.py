@@ -36,7 +36,6 @@ class LoanService:
         *,
         loan: Loan,
         to_status: LoanStatus,
-        actor_user_id: int | None = None,
         message: str | None = None,
     ) -> Loan:
         from_status = loan.status
@@ -48,7 +47,7 @@ class LoanService:
         loan.status = to_status
 
         audit = AuditLog(
-            actor_user_id=actor_user_id,
+            organization_id=loan.organization_id,
             loan_id=loan.id,
             action="loan_status_transition",
             from_status=from_status,

@@ -1,11 +1,11 @@
 from app.db.session import SessionLocal
 from app.core.token import verify_access_token
-from app.db.models.user import User
+from app.db.models.organization import Organization
 from app.core.supabase_auth import SupabasePrincipal, supabase_jwt_verifier
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from app.db.crud.user import get_user
+from app.db.crud.organization import get_organization
 
 security = HTTPBearer()
 
@@ -18,10 +18,10 @@ def get_db():
         db.close()
 
 
-def get_current_user(
+def get_current_organization(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
-) -> User:
+) -> Organization:
     token = credentials.credentials
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -30,8 +30,8 @@ def get_current_user(
     )
 
     token = verify_access_token(token, credentials_exception)
-    user = get_user(db, token.id)
-    if not user:
+    organization = get_organization(db, token.id)
+    if not organization:
         raise credentials_exception
 
-    return user
+    return organization

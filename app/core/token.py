@@ -54,7 +54,7 @@ def verify_access_token(token: str, credentials_exception):
     # print(token)
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        id: str = payload.get("user_id")
+        id: str = payload.get("organization_id")
         if id is None:
             raise credentials_exception
         token_data = TokenData(id=id)
@@ -66,13 +66,13 @@ def verify_access_token(token: str, credentials_exception):
 
     
 def verify_password_reset_token(token: str, db):
-    """Validate a password reset token and return the associated user.
+    """Validate a password reset token and return the associated organization.
 
-    Raises HTTP exceptions for invalid or expired tokens or if the user cannot
-    be found. Returns the matched `User` instance on success.
+    Raises HTTP exceptions for invalid or expired tokens or if the organization cannot
+    be found. Returns the matched `Organization` instance on success.
     """
     from sqlalchemy.orm import Session
-    from app.db.models.user import User
+    from app.db.models.organization import Organization
     try:
         payload = decode_token(token)
         if payload is None:
@@ -80,15 +80,19 @@ def verify_password_reset_token(token: str, db):
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or expired token",
             )
-        user_id: str | None = str(payload.get("user_id"))
+        org_id: str | None = str(payload.get("organization_id"))
         email: str | None = payload.get("email")
-        user = db.query(User).filter(User.id == user_id, User.email == email).first()
-        if user is None:
+        organization = (
+            db.query(Organization)
+            .filter(Organization.id == org_id, Organization.email == email)
+            .first()
+        )
+        if organization is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found for the provided token",
+                detail="Organization not found for the provided token",
             )
-        return user
+        return organization
     except JWTError:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -103,27 +107,27 @@ def hash_refresh_token(token: str) -> str:
 
 def store_refresh_token_redis(
     refresh_token: str,
-    user_id: str,
+    organization_id: str,
     ttl_seconds: Optional[int] = None,
 ) -> None:
     """Store a hashed refresh token in Redis with TTL.
 
     Key:   refresh:{sha256(token)}
-    Value: <user_id>
+    Value: <organization_id>
     TTL:   defaults to ACCESS_TOKEN_EXPIRE_MINUTES to align lifetimes
     """
     redis_client = get_redis()
     ttl = ttl_seconds or (ACCESS_TOKEN_EXPIRE_MINUTES * 60)
-    redis_client.setex(f"refresh:{user_id}", ttl, refresh_token)
+    redis_client.setex(f"refresh:{organization_id}", ttl, refresh_token)
 
 
 def revoke_refresh_token_redis(
-    user_id: str,
+    organization_id: str,
     refresh_token: str,
 ) -> bool:
     """Delete a stored refresh token from Redis. Returns True if deleted."""
     redis_client = get_redis()
-    key = f"refresh:{user_id}"
+    key = f"refresh:{organization_id}"
     val = redis_client.get(key)
     if val != refresh_token:
         return False
@@ -132,19 +136,19 @@ def revoke_refresh_token_redis(
 
 
 def is_refresh_token_active(
-    user_id: str,
+    organization_id: str,
 ) -> bool:
     """Check if a refresh token is currently active in Redis.
 
-    Optionally verify that the stored user id matches ``expected_user_id``.
+    Optionally verify that the stored organization id matches the token subject.
     """
     redis_client = get_redis()
-    val = redis_client.get(f"refresh:{user_id}")
+    val = redis_client.get(f"refresh:{organization_id}")
     if not val:
         return False
     payload = decode_token(val)
-    # If expected_user_id is provided, verify it matches the token's subject
-    if payload.get("sub") != str(user_id):
+    # Verify the token subject matches the organization id
+    if payload.get("sub") != str(organization_id):
         return False
     return True
 

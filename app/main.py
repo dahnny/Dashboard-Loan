@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response
-from app.api.v1.routes import user
+from app.api.v1.routes import user as organization_router
 from app.api.v1.routes.auth import router as auth_router
 from app.api.v1.routes.loan import router as loan_router
 from app.api.v1.routes.loanee import router as loanee_router
@@ -12,11 +13,26 @@ from app.core.idempotency import (
     load_cached_response,
     store_cached_response,
 )
+from app.core.config import settings
 # from app.api.v1.routes.direct_debit import router as dd_router
 
 app = FastAPI()
 
 security = HTTPBearer()
+
+origins = (
+    [origin.strip() for origin in settings.cors_allow_origins.split(",")]
+    if settings.cors_allow_origins
+    else ["http://localhost:5173", "http://127.0.0.1:5173"]
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"] ,
+    allow_headers=["*"],
+)
 
 
 # @app.middleware("http")
@@ -59,7 +75,7 @@ security = HTTPBearer()
 async def read_root():
     return {"message": "Hello, World!"}
 
-app.include_router(user.router, prefix="/api/v1", tags=["users"])
+app.include_router(organization_router.router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(loan_router, prefix="/api/v1")
 app.include_router(loanee_router, prefix="/api/v1")

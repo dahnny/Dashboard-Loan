@@ -58,9 +58,20 @@ class LoanResponse(BaseModel):
         from_attributes = True
 
 
+class LoanSummaryResponse(BaseModel):
+    id: UUID
+    amount: Decimal
+    loan_term_weeks: int
+    due_date: date
+    status: LoanStatus
+    total_payable: Decimal
+
+    class Config:
+        from_attributes = True
+
+
 class LoanStatusTransitionRequest(BaseModel):
     to_status: LoanStatus
-    actor_user_id: int | None = None
     message: str | None = None
 
 
@@ -69,6 +80,10 @@ class LoaneeUpdate(BaseModel):
     email: str | None = None
     phone_number: str | None = None
     address: str | None = None
+
+
+class LoaneeWithLoansResponse(LoaneeResponse):
+    loans: list[LoanSummaryResponse] = []
 
 
 class LoanDocumentResponse(BaseModel):

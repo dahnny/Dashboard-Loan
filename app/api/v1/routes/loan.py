@@ -4,15 +4,21 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_organization, get_db
 from app.db.crud.document import (
     create_document,
     get_document_for_loan,
     list_documents_for_loan,
     list_documents_for_loanee_email,
 )
-from app.db.crud.loan import create_loan, get_loan, list_loans
-from app.db.crud.loanee import get_loanee
+from app.db.crud.loan import (
+    create_loan,
+    get_loan,
+    list_loans,
+    list_loans_for_organization_id,
+)
+from app.db.crud.loan import list_loans_for_organization_email
+from app.db.crud.loanee import get_loanee, list_loans_for_loanee_email
 from app.db.models.loan import LoanStatus
 from app.core.config import settings
 from app.db.schemas.loan import (
@@ -40,12 +46,16 @@ import json
 router = APIRouter(
     prefix="/loans",
     tags=["loans"],
-    dependencies=[Depends(get_current_user)],
+    dependencies=[Depends(get_current_organization)],
 )
 
 
 @router.post("/", response_model=LoanResponse, status_code=status.HTTP_201_CREATED)
-def create_new_loan(payload: LoanCreate, db: Session = Depends(get_db)) -> LoanResponse:
+def create_new_loan(
+    payload: LoanCreate,
+    db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
+) -> LoanResponse:
     service = LoanService(db)
     total_payable = service.compute_total_payable(
         amount=payload.amount, surcharge=payload.surcharge, penalty=payload.penalty
@@ -54,7 +64,7 @@ def create_new_loan(payload: LoanCreate, db: Session = Depends(get_db)) -> LoanR
         start = payload.start_date or date.today()
         due_date = start + service.term_to_timedelta(weeks=payload.loan_term_weeks)
         payload.due_date = due_date
-    return create_loan(db, payload, total_payable=total_payable)
+    return create_loan(db, payload, total_payable=total_payable, organization=organization)
 
 
 @router.post("/{loan_id}/transition", response_model=LoanResponse)
@@ -74,7 +84,6 @@ def transition_loan_status(
         return service.transition_status(
             loan=loan,
             to_status=LoanStatus(payload.to_status),
-            actor_user_id=payload.actor_user_id,
             message=payload.message,
         )
     except InvalidLoanTransitionError as e:
@@ -86,25 +95,82 @@ def list_loans_endpoint(
     status: Optional[LoanStatus] = None,
     due_from: Optional[date] = None,
     due_to: Optional[date] = None,
+    loan_term_weeks: Optional[int] = None,
+    loanee_email: Optional[str] = None,
+    payment_due: Optional[bool] = None,
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
 ) -> list[LoanResponse]:
     return list_loans(
-        db, status=status, due_from=due_from, due_to=due_to, limit=limit, offset=offset
+        db,
+        organization_id=str(organization.id),
+        status=status,
+        due_from=due_from,
+        due_to=due_to,
+        loan_term_weeks=loan_term_weeks,
+        loanee_email=loanee_email,
+        payment_due=payment_due,
+        limit=limit,
+        offset=offset,
     )
 
 
+@router.get("/by-loanee", response_model=list[LoanResponse])
+def list_loans_by_loanee_email_endpoint(
+    email: str,
+    db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
+) -> list[LoanResponse]:
+    return list_loans_for_loanee_email(db, organization_id=organization.id, email=email)
+
+
+@router.get("/by-organization", response_model=list[LoanResponse])
+def list_loans_by_organization_email_endpoint(
+    email: str,
+    db: Session = Depends(get_db),
+) -> list[LoanResponse]:
+    return list_loans_for_organization_email(db, organization_email=email)
+
+
+@router.get("/by-organization-id", response_model=list[LoanResponse])
+def list_loans_by_organization_id_endpoint(
+    organization_id: UUID,
+    db: Session = Depends(get_db),
+) -> list[LoanResponse]:
+    return list_loans_for_organization_id(db, organization_id=str(organization_id))
+
+
+@router.get("/{loan_id}", response_model=LoanResponse)
+def get_loan_endpoint(loan_id: UUID, db: Session = Depends(get_db)) -> LoanResponse:
+    loan = get_loan(db, loan_id)
+    if not loan:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Loan not found"
+        )
+    return loan
+
+
 @router.get("/due-today", response_model=list[LoanResponse])
-def due_today_endpoint(db: Session = Depends(get_db)) -> list[LoanResponse]:
+def due_today_endpoint(
+    db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
+) -> list[LoanResponse]:
     today = date.today()
-    cache_key = f"due_today:{today.isoformat()}"
+    cache_key = f"due_today:{organization.id}:{today.isoformat()}"
     r = get_redis()
     cached = r.get(cache_key)
     if cached:
         return [LoanResponse(**obj) for obj in json.loads(cached)]
     items = list_loans(
-        db, status=LoanStatus.due, due_from=today, due_to=today, limit=500, offset=0
+        db,
+        organization_id=str(organization.id),
+        status=LoanStatus.due,
+        due_from=today,
+        due_to=today,
+        limit=500,
+        offset=0,
     )
     payload = [LoanResponse.from_orm(x).dict() for x in items]
     r.setex(cache_key, 60, json.dumps(payload))
@@ -121,6 +187,7 @@ async def upload_document_endpoint(
     loan_id: UUID,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
 ) -> LoanDocumentResponse:
     loan = get_loan(db, loan_id)
     if not loan:
@@ -155,6 +222,7 @@ async def upload_document_endpoint(
 
     doc = create_document(
         db,
+        organization_id=organization.id,
         loanee_id=loan.loanee_id,
         loan_id=loan_id,
         document_type=document_type,
@@ -174,22 +242,25 @@ async def upload_document_endpoint(
 
 @router.get("/{loan_id}/documents", response_model=list[LoanDocumentResponse])
 def list_documents_endpoint(
-    loan_id: UUID, db: Session = Depends(get_db)
+    loan_id: UUID,
+    db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
 ) -> list[LoanDocumentResponse]:
     loan = get_loan(db, loan_id)
     if not loan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Loan not found"
         )
-    return list_documents_for_loan(db, loan_id)
+    return list_documents_for_loan(db, organization_id=organization.id, loan_id=loan_id)
 
 
 @router.get("/documents/by-loanee", response_model=list[LoanDocumentResponse])
 def list_documents_by_loanee_email_endpoint(
     email: str,
     db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
 ) -> list[LoanDocumentResponse]:
-    return list_documents_for_loanee_email(db, email=email)
+    return list_documents_for_loanee_email(db, organization_id=organization.id, email=email)
 
 @router.get(
     "/{loan_id}/documents/{document_id}/signed-url", response_model=SignedUrlResponse
@@ -199,13 +270,16 @@ async def get_document_signed_url_endpoint(
     document_id: UUID,
     expires_in: int = 60,
     db: Session = Depends(get_db),
+    organization=Depends(get_current_organization),
 ) -> SignedUrlResponse:
     loan = get_loan(db, loan_id)
     if not loan:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Loan not found"
         )
-    doc = get_document_for_loan(db, loan_id=loan_id, document_id=document_id)
+    doc = get_document_for_loan(
+        db, organization_id=organization.id, loan_id=loan_id, document_id=document_id
+    )
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Document not found"
